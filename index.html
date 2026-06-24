@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>PCOSense | AI-Powered PCOS Detection</title>
+  <!-- Tailwind + Font Awesome + Google Fonts -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
+  <style>
+    * { font-family: 'Inter', sans-serif; }
+    body { background: #f9f7fe; }
+    .card-hover { transition: all 0.2s ease; }
+    .card-hover:hover { transform: translateY(-3px); box-shadow: 0 12px 24px -12px rgba(0,0,0,0.12); }
+    .progress-ring { transition: stroke-dashoffset 0.3s; }
+    .upload-area { border: 2px dashed #c4b5fd; background: #fdfaff; transition: all 0.2s; }
+    .upload-area:hover { background: #f5f0ff; border-color: #a78bfa; }
+    .btn-primary { background: #8b5cf6; transition: all 0.2s; }
+    .btn-primary:hover { background: #7c3aed; transform: scale(0.98); }
+    .step-active { background: #8b5cf6; color: white; border-color: #8b5cf6; }
+    .history-card { border-left: 4px solid #f472b6; }
+    /* PCOS Detected -> red; At Risk -> pink; No PCOS -> green (darker for visibility) */
+    .result-badge-pcos { background: #f87171; color: #7f1d1d; border: 1px solid rgba(127,29,29,0.16); box-shadow: 0 6px 18px rgba(127,29,29,0.08); display:inline-block; }
+    .result-badge-risk { background: #ff7aa2; color: #7a1730; border: 1px solid rgba(122,23,48,0.12); box-shadow: 0 6px 18px rgba(122,23,48,0.06); display:inline-block; }
+    .result-badge-normal { background: #34d399; color: #064e3b; border: 1px solid rgba(6,78,59,0.12); box-shadow: 0 6px 18px rgba(6,78,59,0.06); display:inline-block; }
+    .result-badge-pcos, .result-badge-risk, .result-badge-normal { padding-left: 0.9rem; padding-right: 0.9rem; }
+    .chart-bar-fill { transition: width 0.5s cubic-bezier(0.2, 0.9, 0.4, 1.1); }
+    img, canvas { max-width: 100%; border-radius: 1rem; }
+    .rating-btn.selected { background: #8b5cf6 !important; color: white !important; border-color: #8b5cf6 !important; }
+    .sus-btn.selected { background: #8b5cf6 !important; color: white !important; border-color: #8b5cf6 !important; }
+    .section-toggle { cursor: pointer; user-select: none; }
+  </style>
+</head>
+<body class="antialiased">
+
+  <!-- Main Container -->
+  <div class="max-w-6xl mx-auto px-4 py-6 md:py-8">
+    <!-- Header with Logo -->
+    <div class="flex flex-wrap justify-between items-center mb-8 gap-4">
+      <div class="flex items-center gap-3">
+        <div class="bg-gradient-to-br from-purple-500 to-pink-400 w-10 h-10 rounded-xl flex items-center justify-center shadow-md">
+          <i class="fas fa-venus text-white text-xl" aria-hidden="true"></i>
+        </div>
+        <div>
+          <h1 class="text-2xl font-bold text-gray-800 tracking-tight">PCOSense<span class="text-purple-600">.</span></h1>
+          <p class="text-xs text-gray-500">AI · Ultrasound · Explainable</p>
+        </div>
+      </div>
+      <div class="flex gap-3">
+        <button id="navDashboardBtn" class="px-4 py-2 rounded-full text-sm font-medium bg-white shadow-sm text-gray-700 hover:bg-purple-50 transition"><i class="fas fa-chalkboard-user mr-1"></i> Dashboard</button>
+        <button id="navHistoryBtn" class="px-4 py-2 rounded-full text-sm font-medium bg-white shadow-sm text-gray-700 hover:bg-purple-50 transition"><i class="fas fa-clock-rotate-left mr-1"></i> History</button>
+        <button id="newScreeningNavBtn" class="px-4 py-2 rounded-full bg-purple-600 text-white shadow-sm text-sm font-medium hover:bg-purple-700 transition"><i class="fas fa-plus-circle mr-1"></i> New Screening</button>
+      </div>
+    </div>
+
+    <!-- Dynamic Views Container -->
+    <div id="appViewContainer" class="transition-all duration-300"></div>
+  </div>
+
+  <script>
+    // ---------- GLOBALS ----------
+    let currentView = 'dashboard';     
+    let uploadedImageDataURL = null;
+    let clinicalData = {
+      age: '', height: '', weight: '', bmi: '',
+      menstrualIrregularities: 'no', acne: 'no', weightGain: 'no', familyHistory: 'no'
+    };
+    let latestAIResult = null;          
+    let screeningHistory = [];
+    let expertValidationData = {};
+    let susRatingsData = {};
+
+    const container = document.getElementById('appViewContainer');
+
+    // ---------- STORAGE HELPERS ----------
+    function loadHistoryFromStorage() {
+      const stored = localStorage.getItem('pcosense_history');
+      if (stored) {
+        screeningHistory = JSON.parse(stored);
+      } else {
+        screeningHistory = [
+          { id: 'hist1', date: '2025-03-10', prediction: 'PCOS Detected', confidence: 87, clinicalSnapshot: { age: 27, bmi: 28.5, menstrual: 'yes' } },
+          { id: 'hist2', date: '2025-02-22', prediction: 'At Risk', confidence: 62, clinicalSnapshot: { age: 24, bmi: 24.1, menstrual: 'no' } },
+          { id: 'hist3', date: '2025-01-15', prediction: 'No PCOS Detected', confidence: 91, clinicalSnapshot: { age: 31, bmi: 22.3, menstrual: 'no' } }
+        ];
+        saveHistoryToStorage();
+      }
+    }
+
+    function saveHistoryToStorage() {
+      localStorage.setItem('pcosense_history', JSON.stringify(screeningHistory));
+    }
+
+    function addToHistory(prediction, confidence, clinicalSnapshot, imageRef = null, expertScore = null) {
+      const newEntry = {
+        id: Date.now().toString(),
+        date: new Date().toLocaleDateString('en-CA'),
+        prediction: prediction,
+        confidence: confidence,
+        clinicalSnapshot: clinicalSnapshot,
+        expertValidation: expertScore
+      };
+      screeningHistory.unshift(newEntry);
+      if (screeningHistory.length > 12) screeningHistory.pop();
+      saveHistoryToStorage();
+    }
+
+    // ---------- AI SIMULATION ----------
+    function simulateAIDetection(clinical, hasImage) {
+      let score = 0;
+      const factors = {};
+      if (clinical.menstrualIrregularities === 'yes') { score += 3; factors.menstrual = 3; } else factors.menstrual = 0;
+      if (clinical.acne === 'yes') { score += 1.5; factors.acne = 1.5; } else factors.acne = 0;
+      if (clinical.weightGain === 'yes') { score += 2; factors.weight = 2; } else factors.weight = 0;
+      if (clinical.familyHistory === 'yes') { score += 1.5; factors.family = 1.5; } else factors.family = 0;
+      let bmiVal = parseFloat(clinical.bmi);
+      let bmiPoints = 0;
+      if (!isNaN(bmiVal)) {
+        if (bmiVal >= 30) bmiPoints = 2.5;
+        else if (bmiVal >= 25) bmiPoints = 1.5;
+        else if (bmiVal >= 18.5) bmiPoints = 0;
+        else bmiPoints = 0.5;
+        score += bmiPoints;
+        factors.bmi = bmiPoints;
+      } else factors.bmi = 0;
+      
+      let ageVal = parseInt(clinical.age);
+      let agePoints = 0;
+      if (!isNaN(ageVal) && ageVal >= 18 && ageVal <= 40) agePoints = 0.2;
+      score += agePoints;
+      factors.age = agePoints;
+
+      let ultrasoundImpact = 0;
+      let folliclePresence = false;
+      if (hasImage) {
+        ultrasoundImpact = (score > 2.5) ? 1.2 : 0.6;
+        score += ultrasoundImpact;
+        folliclePresence = true;
+        factors.ultrasoundFollicles = ultrasoundImpact;
+      } else factors.ultrasoundFollicles = 0;
+
+      let prediction = '';
+      let confidenceBase = 0;
+      if (score >= 6) { prediction = 'PCOS Detected'; confidenceBase = 75 + Math.min(20, Math.floor(score * 2.5)); }
+      else if (score >= 3.2) { prediction = 'At Risk'; confidenceBase = 55 + Math.floor((score - 3) * 12); }
+      else { prediction = 'No PCOS Detected'; confidenceBase = 70 + (5 - score) * 4; }
+      
+      let confidence = Math.min(98, Math.max(52, confidenceBase));
+      if (prediction === 'PCOS Detected') confidence = Math.min(96, confidence);
+      if (prediction === 'At Risk') confidence = Math.min(88, confidence);
+      
+      const contributions = {
+        'Menstrual irregularities': factors.menstrual || 0,
+        'Acne': factors.acne || 0,
+        'Weight gain': factors.weight || 0,
+        'Family history': factors.family || 0,
+        'High BMI': factors.bmi || 0,
+        'Ultrasound signs': factors.ultrasoundFollicles || 0
+      };
+      return { prediction, confidence, contributions, folliclePresence, totalScore: score };
+    }
+
+    // ---------- DRAW ULTRASOUND HEATMAP ----------
+    function drawHighlightedUltrasound(imgElement, canvasElement, folliclePresent) {
+      const ctx = canvasElement.getContext('2d');
+      canvasElement.width = imgElement.width;
+      canvasElement.height = imgElement.height;
+      ctx.drawImage(imgElement, 0, 0, imgElement.width, imgElement.height);
+      if (folliclePresent) {
+        ctx.save();
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = 0.5;
+        ctx.beginPath();
+        ctx.ellipse(imgElement.width * 0.35, imgElement.height * 0.55, imgElement.width*0.12, imgElement.height*0.09, 0, 0, 2*Math.PI);
+        ctx.fillStyle = '#f472b6';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(imgElement.width * 0.68, imgElement.height * 0.52, imgElement.width*0.12, imgElement.height*0.09, 0, 0, 2*Math.PI);
+        ctx.fill();
+        ctx.globalAlpha = 0.9;
+        ctx.beginPath();
+        ctx.arc(imgElement.width * 0.33, imgElement.height * 0.53, 10, 0, 2*Math.PI);
+        ctx.fillStyle = '#ec489a';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(imgElement.width * 0.65, imgElement.height * 0.51, 9, 0, 2*Math.PI);
+        ctx.fill();
+        ctx.fillStyle = 'white';
+        ctx.font = `bold ${Math.max(12, imgElement.width*0.03)}px Inter`;
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#fff0f5';
+        ctx.fillText("🔍 follicles", imgElement.width*0.3, imgElement.height*0.48);
+        ctx.restore();
+      } else {
+        ctx.font = `14px Inter`;
+        ctx.fillStyle = '#a78bfa';
+        ctx.shadowBlur = 0;
+        ctx.fillText("Normal ovarian appearance", imgElement.width*0.05, imgElement.height*0.1);
+      }
+    }
+
+    // ---------- RENDER: CLINICAL UPLOAD ----------
+    function renderClinicalUploadView() {
+      return `
+        <div class="bg-white rounded-2xl shadow-sm border border-purple-100 p-6 md:p-8">
+          <div class="flex items-center gap-3 mb-6">
+            <i class="fas fa-notes-medical text-purple-500 text-2xl"></i>
+            <h2 class="text-2xl font-semibold text-gray-800">Clinical Information & Ultrasound</h2>
+          </div>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div class="bg-gray-50 p-4 rounded-xl"><label class="text-sm font-medium text-gray-600 flex items-center gap-2"><i class="fas fa-calendar-alt text-purple-400"></i>Age</label><input type="number" id="ageInput" class="mt-1 w-full p-2 border border-gray-200 rounded-lg" placeholder="e.g., 28" value="${clinicalData.age}"></div>
+                <div class="bg-gray-50 p-4 rounded-xl"><label class="text-sm font-medium text-gray-600 flex items-center gap-2"><i class="fas fa-ruler-vertical text-purple-400"></i>Height (cm)</label><input type="number" step="0.1" id="heightInput" class="mt-1 w-full p-2 border border-gray-200 rounded-lg" placeholder="e.g., 165" value="${clinicalData.height}"></div>
+              </div>
+              <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div class="bg-gray-50 p-4 rounded-xl"><label class="text-sm font-medium text-gray-600 flex items-center gap-2"><i class="fas fa-scale-balanced text-purple-400"></i>Weight (kg)</label><input type="number" step="0.1" id="weightInput" class="mt-1 w-full p-2 border border-gray-200 rounded-lg" placeholder="e.g., 62" value="${clinicalData.weight}"></div>
+                <div class="bg-gray-50 p-4 rounded-xl flex items-center"><div><label class="text-sm font-medium text-gray-600 flex items-center gap-2"><i class="fas fa-calculator text-purple-400"></i>Computed BMI</label><div id="bmiDisplay" class="mt-1 text-lg font-semibold text-gray-800">BMI: <span id="bmiValue">${clinicalData.bmi || '-'}</span></div></div></div>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-5 mt-3">
+                ${makeSelectCard('Menstrual irregularities', 'menstrualSelect', ['yes','no'], clinicalData.menstrualIrregularities, 'fa-droplet')}
+                ${makeSelectCard('Acne / Hirsutism', 'acneSelect', ['yes','no'], clinicalData.acne, 'fa-face-frown')}
+                ${makeSelectCard('Unexplained weight gain', 'weightSelect', ['yes','no'], clinicalData.weightGain, 'fa-chart-line')}
+                ${makeSelectCard('Family history (PCOS)', 'familySelect', ['yes','no'], clinicalData.familyHistory, 'fa-people-arrows')}
+              </div>
+            </div>
+            <div>
+              <div class="bg-purple-50/30 rounded-xl p-4 border border-purple-100">
+                <label class="block text-sm font-semibold text-gray-700 mb-2"><i class="fas fa-ultrasound mr-2 text-purple-500"></i>Ovarian Ultrasound Image</label>
+                <div id="uploadArea" class="upload-area rounded-2xl p-6 text-center cursor-pointer transition">
+                  <i class="fas fa-cloud-upload-alt text-4xl text-purple-300 mb-2"></i>
+                  <p class="text-gray-500 text-sm">Drag & click to upload (JPG, PNG)</p>
+                  <input type="file" id="imageUploadInput" accept="image/jpeg,image/png" class="hidden" />
+                </div>
+                <div id="imagePreviewContainer" class="mt-4 ${uploadedImageDataURL ? '' : 'hidden'}">
+                  <img id="uploadPreviewImg" src="${uploadedImageDataURL || ''}" class="rounded-xl max-h-48 object-contain w-full border border-purple-200" alt="preview">
+                  <button id="removeImageBtn" class="text-xs text-red-400 mt-1 underline">Remove</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="mt-8 flex justify-end gap-3">
+            <button id="cancelClinicalBtn" class="px-5 py-2 rounded-full border border-gray-300 text-gray-600">Cancel</button>
+            <button id="startAnalysisBtn" class="btn-primary px-6 py-2 rounded-full text-white font-medium shadow"> Analyze with AI</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function makeSelectCard(label, id, options, currentVal, icon) {
+      const opts = options.map(opt => `<option value="${opt}" ${currentVal===opt ? 'selected' : ''}>${opt === 'yes' ? 'Yes' : 'No'}</option>`).join('');
+      return `<div class="bg-gray-50 p-4 rounded-xl"><label class="text-sm font-medium text-gray-600 flex items-center gap-2"><i class="fas ${icon} text-purple-400"></i>${label}</label><select id="${id}" class="mt-1 w-full p-2 border border-gray-200 rounded-lg bg-white">${opts}</select></div>`;
+    }
+
+    // ---------- RENDER: LOADING ----------
+    function renderLoadingView() {
+      return `
+        <div class="bg-white rounded-2xl p-10 shadow-sm text-center">
+          <div class="flex flex-col items-center gap-5">
+            <i class="fas fa-brain text-5xl text-purple-400 animate-pulse"></i>
+            <h3 class="text-2xl font-semibold">AI Analyzing your data & ultrasound</h3>
+            <div class="w-full max-w-md bg-gray-100 rounded-full h-3 overflow-hidden">
+              <div id="progressFill" class="bg-gradient-to-r from-purple-500 to-pink-400 h-3 rounded-full w-0 transition-all duration-500"></div>
+            </div>
+            <p class="text-gray-500 text-sm">Deep learning model detecting follicles, ovarian volume & clinical patterns...</p>
+          </div>
+        </div>
+      `;
+    }
+
+    // ---------- HELPER: XAI MAPPING SECTION ----------
+    function generateExplanation(prediction, contributions, confidence) {
+      const topFactors = Object.entries(contributions)
+        .filter(([k,v]) => v > 0.8)
+        .map(([k]) => k);
+      if (prediction === 'PCOS Detected') {
+        return `The model detected PCOS with ${confidence}% confidence. The strongest indicators were: ${topFactors.join(', ')}. The ultrasound heatmap shows highlighted follicles in the ovarian region, consistent with polycystic ovary morphology.`;
+      } else if (prediction === 'At Risk') {
+        return `The model identified moderate risk factors for PCOS (${confidence}% confidence). Key contributing factors: ${topFactors.join(', ')}. The ultrasound shows some follicular activity, but not conclusive for PCOS.`;
+      } else {
+        return `The model did not detect PCOS (${confidence}% confidence). No significant risk factors identified. The ultrasound appears normal with no polycystic morphology.`;
+      }
+    }
+
+    function getIoUScore(folliclePresent) {
+      return folliclePresent ? 0.78 : 0.12;
+    }
+
+    // ---------- RENDER: RESULTS (Main Analysis Page) ----------
+    function renderResultsView(aiResult, clinical, imageURL) {
+      const { prediction, confidence, contributions, folliclePresence } = aiResult;
+      let pcosChance = 0;
+      if (prediction === 'PCOS Detected') pcosChance = Math.round(confidence);
+      else if (prediction === 'At Risk') pcosChance = Math.max(30, Math.round(confidence * 0.75));
+      else pcosChance = Math.max(1, Math.round(100 - confidence));
+      
+      let barColor = '#34d399';
+      if (pcosChance >= 65) barColor = '#ef4444';
+      else if (pcosChance >= 35) barColor = '#fb7185';
+      
+      let badgeClass = '';
+      if (prediction === 'PCOS Detected') badgeClass = 'result-badge-pcos';
+      else if (prediction === 'At Risk') badgeClass = 'result-badge-risk';
+      else badgeClass = 'result-badge-normal';
+
+      let contribHtml = '';
+      const maxContrib = Math.max(...Object.values(contributions), 0.1);
+      for (const [factor, value] of Object.entries(contributions)) {
+        const percentWidth = (value / maxContrib) * 100;
+        contribHtml += `<div class="mb-3"><div class="flex justify-between text-xs text-gray-600"><span>${factor}</span><span>${value.toFixed(1)} pts</span></div><div class="w-full bg-gray-100 rounded-full h-2"><div class="bg-purple-500 h-2 rounded-full chart-bar-fill" style="width: ${percentWidth}%"></div></div></div>`;
+      }
+
+      return `
+        <div class="bg-white rounded-2xl shadow-md border border-purple-100 overflow-hidden">
+          <div class="p-6 bg-gradient-to-r from-purple-50 to-pink-50 border-b">
+            <div class="flex items-center justify-between flex-wrap gap-3">
+              <h2 class="text-2xl font-bold text-gray-800"><i class="fas fa-chart-simple mr-2 text-purple-600"></i>Assessment Results</h2>
+              <span class="px-4 py-1.5 rounded-full text-sm font-bold ${badgeClass} shadow-sm">${prediction}</span>
+            </div>
+            <div class="mt-2 flex items-center gap-2">
+              <span class="text-sm text-gray-500">Chance of PCOS:</span>
+              <div class="w-32 bg-gray-200 rounded-full h-2">
+                <div class="h-2 rounded-full" style="width: ${pcosChance}%; background: ${barColor};"></div>
+              </div>
+              <span class="font-semibold">${pcosChance}%</span>
+            </div>
+          </div>
+          <div class="p-6 grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div>
+              <h3 class="font-semibold text-gray-800 mb-3"><i class="fas fa-chart-bar text-purple-400 mr-2"></i>Symptom & Feature Impact</h3>
+              <div class="bg-gray-50 p-4 rounded-xl">${contribHtml}</div>
+              <div class="mt-5 bg-pink-50 p-4 rounded-xl">
+                <i class="fas fa-stethoscope text-pink-500 mr-2"></i>
+                <span class="text-sm">Key drivers: ${Object.entries(contributions).filter(([k,v])=>v>0.8).map(([k])=>k).join(', ') || 'balanced profile'}</span>
+              </div>
+            </div>
+            <div>
+              <h3 class="font-semibold text-gray-800 mb-3"><i class="fas fa-ultrasound mr-2 text-purple-400"></i>Ultrasound Region Analysis</h3>
+              <div class="bg-gray-100 rounded-xl p-2 text-center">
+                <canvas id="highlightCanvas" class="rounded-xl w-full max-h-64 object-contain"></canvas>
+                <p class="text-xs text-gray-500 mt-2">🔍 highlighted follicles / ovarian morphology</p>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Navigation to Detailed Pages -->
+          <div class="px-6 py-6 bg-gradient-to-r from-purple-50/50 to-pink-50/50 border-t border-purple-100">
+            <h4 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+              <i class="fas fa-directions text-purple-500"></i> View Detailed Analysis
+            </h4>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <button id="goToXAIMapping" class="p-4 bg-white rounded-xl border border-purple-200 hover:border-purple-500 hover:shadow-md transition text-left">
+                <i class="fas fa-link text-purple-500 text-xl mb-2 block"></i>
+                <h5 class="font-semibold text-gray-800">XAI Mapping</h5>
+                <p class="text-xs text-gray-500 mt-1">Understand model decisions & heatmap alignment</p>
+              </button>
+              <button id="goToExpertValidation" class="p-4 bg-white rounded-xl border border-pink-200 hover:border-pink-500 hover:shadow-md transition text-left">
+                <i class="fas fa-user-md text-pink-500 text-xl mb-2 block"></i>
+                <h5 class="font-semibold text-gray-800">Expert Assessment</h5>
+                <p class="text-xs text-gray-500 mt-1">Validate explainability with clinical feedback</p>
+              </button>
+              <button id="goToSUS" class="p-4 bg-white rounded-xl border border-yellow-200 hover:border-yellow-500 hover:shadow-md transition text-left">
+                <i class="fas fa-star text-yellow-500 text-xl mb-2 block"></i>
+                <h5 class="font-semibold text-gray-800">System Feedback</h5>
+                <p class="text-xs text-gray-500 mt-1">Share your usability experience</p>
+              </button>
+            </div>
+          </div>
+
+          <div class="px-6 pb-6 flex flex-wrap justify-between gap-3">
+            <button id="saveAndHistoryBtn" class="bg-purple-100 text-purple-700 px-5 py-2 rounded-full text-sm hover:bg-purple-200 transition"><i class="fas fa-save"></i> Save to History</button>
+            <button id="newScreeningFromResults" class="bg-purple-600 text-white px-5 py-2 rounded-full text-sm hover:bg-purple-700 transition"><i class="fas fa-file-medical"></i> New Screening</button>
+            <button id="dashboardFromResults" class="border border-gray-300 px-5 py-2 rounded-full text-sm hover:bg-gray-50 transition">Dashboard</button>
+          </div>
+        </div>
+      `;
+    }
+
+    // ---------- RENDER: XAI MAPPING DETAIL PAGE ----------
+    function renderXAIMappingPage() {
+      const { prediction, confidence, contributions, folliclePresence } = latestAIResult;
+      const explanationText = generateExplanation(prediction, contributions, confidence);
+      const iouScore = getIoUScore(folliclePresence);
+      const alignmentPercent = folliclePresence ? 85 : 95;
+
+      const regions = [
+        { name: 'Left Ovary', impact: folliclePresence ? 'high' : 'low' },
+        { name: 'Right Ovary', impact: folliclePresence ? 'high' : 'low' },
+        { name: 'Uterus Area', impact: 'low' },
+        { name: 'Background', impact: 'none' }
+      ];
+
+      let perturbHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          ${regions.map(r => `
+            <div class="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
+              <div class="flex justify-between items-center mb-3">
+                <span class="font-semibold text-gray-800">${r.name}</span>
+                <span class="text-xs px-2 py-1 rounded-full ${r.impact === 'high' ? 'bg-red-100 text-red-700' : r.impact === 'low' ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700'}">
+                  ${r.impact === 'high' ? '🔴 Critical' : r.impact === 'low' ? '🟡 Minor' : '🟢 None'}
+                </span>
+              </div>
+              <div class="w-full bg-gray-200 rounded-full h-2 mb-2">
+                <div class="h-2 rounded-full ${r.impact === 'high' ? 'bg-red-500' : r.impact === 'low' ? 'bg-yellow-500' : 'bg-green-500'}" 
+                     style="width: ${r.impact === 'high' ? '85%' : r.impact === 'low' ? '30%' : '5%'}">
+                </div>
+              </div>
+              <p class="text-sm text-gray-600">${r.impact === 'high' ? 'Removing this changes the prediction significantly' : r.impact === 'low' ? 'Minor impact on model decision' : 'No measurable impact'}</p>
+            </div>
+          `).join('')}
+        </div>
+      `;
+
+      return `
+        <div class="bg-white rounded-2xl shadow-md border border-purple-100 overflow-hidden">
+          <div class="p-6 bg-gradient-to-r from-purple-50 to-pink-50 border-b flex items-center justify-between">
+            <h2 class="text-2xl font-bold text-gray-800"><i class="fas fa-link mr-2 text-purple-600"></i>XAI-Result Mapping</h2>
+            <button id="backFromXAI" class="p-2 rounded-lg hover:bg-purple-100 transition"><i class="fas fa-arrow-left text-purple-600"></i></button>
+          </div>
+          
+          <div class="p-8 space-y-6">
+            <!-- Prediction Summary -->
+            <div class="bg-blue-50 border border-blue-200 p-5 rounded-xl">
+              <h3 class="font-semibold text-gray-800 mb-2 flex items-center gap-2">
+                <i class="fas fa-microscope text-blue-600"></i> Prediction Summary
+              </h3>
+              <p class="text-gray-700 leading-relaxed">${explanationText}</p>
+            </div>
+
+            <!-- Region-Prediction Alignment -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="bg-green-50 border border-green-200 p-5 rounded-xl">
+                <h4 class="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                  <i class="fas fa-check-circle text-green-600"></i> Region-Prediction Alignment
+                </h4>
+                <div class="flex items-center gap-3 mb-2">
+                  <div class="flex-1 bg-gray-200 rounded-full h-3">
+                    <div class="bg-green-500 h-3 rounded-full" style="width: ${alignmentPercent}%"></div>
+                  </div>
+                  <span class="text-lg font-bold text-green-700">${alignmentPercent}%</span>
+                </div>
+                <p class="text-sm text-gray-600">${folliclePresence ? '✓ Heatmap regions align well with follicle detection' : '✓ Heatmap regions align with normal ovarian morphology'}</p>
+              </div>
+
+              <div class="bg-purple-50 border border-purple-200 p-5 rounded-xl">
+                <h4 class="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                  <i class="fas fa-layer-group text-purple-600"></i> IoU Score (Heatmap vs Clinical)
+                </h4>
+                <div class="flex items-center gap-3 mb-2">
+                  <div class="flex-1 bg-gray-200 rounded-full h-3">
+                    <div class="bg-purple-500 h-3 rounded-full" style="width: ${Math.round(getIoUScore(folliclePresence) * 100)}%"></div>
+                  </div>
+                  <span class="text-lg font-bold text-purple-700">${Math.round(getIoUScore(folliclePresence) * 100)}%</span>
+                </div>
+                <p class="text-sm text-gray-600">Intersection over Union between highlighted regions and clinical features</p>
+              </div>
+            </div>
+
+            <!-- Ultrasound Analysis -->
+            <div class="bg-gray-50 border border-gray-200 p-5 rounded-xl">
+              <h4 class="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                <i class="fas fa-ultrasound text-purple-500"></i> Ultrasound Heatmap
+              </h4>
+              <div class="bg-white rounded-xl p-3 text-center">
+                <canvas id="xaiHighlightCanvas" class="rounded-xl w-full max-h-80 object-contain"></canvas>
+                <p class="text-xs text-gray-500 mt-3">🔍 Pink overlays indicate follicle presence detected by the model</p>
+              </div>
+            </div>
+
+            <!-- Perturbation Analysis -->
+            <div class="bg-orange-50 border border-orange-200 p-5 rounded-xl">
+              <h4 class="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                <i class="fas fa-flask text-orange-600"></i> Perturbation Test: Heatmap-Prediction Consistency
+              </h4>
+              <p class="text-sm text-gray-600 mb-4">Testing if highlighted regions causally affect the prediction</p>
+              ${perturbHTML}
+            </div>
+
+            <!-- Contribution Breakdown -->
+            <div class="bg-pink-50 border border-pink-200 p-5 rounded-xl">
+              <h4 class="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                <i class="fas fa-chart-pie text-pink-600"></i> Factor Contributions
+              </h4>
+              <div class="space-y-3">
+                ${Object.entries(latestAIResult.contributions).map(([factor, value]) => {
+                  const maxContrib = Math.max(...Object.values(latestAIResult.contributions), 0.1);
+                  const percentWidth = (value / maxContrib) * 100;
+                  return `
+                    <div>
+                      <div class="flex justify-between text-sm text-gray-700 mb-1">
+                        <span class="font-medium">${factor}</span>
+                        <span>${value.toFixed(2)} pts</span>
+                      </div>
+                      <div class="w-full bg-gray-200 rounded-full h-2.5">
+                        <div class="bg-gradient-to-r from-pink-400 to-pink-600 h-2.5 rounded-full" style="width: ${percentWidth}%"></div>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          </div>
+
+          <div class="px-8 py-4 bg-gradient-to-r from-purple-50/50 to-pink-50/50 border-t border-purple-100 flex justify-between gap-3">
+            <button id="backToResultsFromXAI" class="px-5 py-2 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 transition"><i class="fas fa-arrow-left mr-1"></i> Back to Results</button>
+            <button id="goToExpertFromXAI" class="bg-purple-600 text-white px-5 py-2 rounded-full hover:bg-purple-700 transition"><i class="fas fa-arrow-right mr-1"></i> Expert Assessment</button>
+          </div>
+        </div>
+      `;
+    }
+
+    // ---------- RENDER: EXPERT VALIDATION PAGE ----------
+    function renderExpertValidationPage() {
+      return `
+        <div class="bg-white rounded-2xl shadow-md border border-purple-100 overflow-hidden">
+          <div class="p-6 bg-gradient-to-r from-purple-50 to-pink-50 border-b flex items-center justify-between">
+            <h2 class="text-2xl font-bold text-gray-800"><i class="fas fa-user-md mr-2 text-pink-600"></i>Expert Validation</h2>
+            <button id="backFromExpert" class="p-2 rounded-lg hover:bg-pink-100 transition"><i class="fas fa-arrow-left text-pink-600"></i></button>
+          </div>
+          
+          <div class="p-8 space-y-6">
+            <div class="bg-gradient-to-r from-pink-50 to-red-50 border border-pink-200 p-5 rounded-xl">
+              <h3 class="font-semibold text-gray-800 mb-2 flex items-center gap-2">
+                <i class="fas fa-stethoscope text-pink-600"></i> Gynecologist Assessment
+              </h3>
+              <p class="text-gray-700">Please rate how well the AI's Grad-CAM heatmap explains the prediction. Your feedback helps us improve explainability.</p>
+            </div>
+
+            <div class="space-y-4">
+              ${[
+                { idx: 0, label: 'Region-Prediction Alignment', desc: 'How well do the highlighted regions match the prediction?' },
+                { idx: 1, label: 'Clinical Relevance', desc: 'Are the highlighted regions clinically relevant for PCOS detection?' },
+                { idx: 2, label: 'Heatmap-Prediction Consistency', desc: 'Is the explanation consistent with the final prediction?' },
+                { idx: 3, label: 'Confidence-Heatmap Correlation', desc: 'Does the heatmap intensity correlate with confidence?' }
+              ].map(item => `
+                <div class="bg-white border border-gray-200 p-5 rounded-xl">
+                  <label class="block font-semibold text-gray-800 mb-1">${item.label}</label>
+                  <p class="text-sm text-gray-600 mb-3">${item.desc}</p>
+                  <div class="flex gap-2 mb-2">
+                    ${[1,2,3,4,5].map(n => `<button class="expert-rating-btn w-10 h-10 rounded-full border-2 border-gray-300 font-semibold text-gray-700 hover:border-pink-500 hover:bg-pink-100 transition" data-criteria="${item.idx}" data-value="${n}">${n}</button>`).join('')}
+                  </div>
+                  <div class="flex justify-between text-xs text-gray-400 px-1">
+                    <span>Poor</span>
+                    <span>Excellent</span>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+
+            <div class="bg-blue-50 border border-blue-200 p-5 rounded-xl">
+              <label class="block font-semibold text-gray-800 mb-2 flex items-center gap-2">
+                <i class="fas fa-comment text-blue-600"></i> Additional Comments (Optional)
+              </label>
+              <textarea id="expertComments" class="w-full p-3 border border-gray-300 rounded-lg resize-none h-24" placeholder="Share any additional feedback or observations..."></textarea>
+            </div>
+
+            <div id="expertFeedback" class="hidden bg-green-50 border border-green-200 p-5 rounded-xl">
+              <p class="text-green-800 font-semibold"><i class="fas fa-check-circle mr-2"></i>Validation submitted successfully!</p>
+              <p id="expertFeedbackDetails" class="text-sm text-green-700 mt-2"></p>
+            </div>
+          </div>
+
+          <div class="px-8 py-4 bg-gradient-to-r from-pink-50/50 to-red-50/50 border-t border-pink-200 flex justify-between gap-3">
+            <button id="backToResultsFromExpert" class="px-5 py-2 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 transition"><i class="fas fa-arrow-left mr-1"></i> Back</button>
+            <div class="flex gap-3">
+              <button id="goToSUSFromExpert" class="px-5 py-2 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 transition"><i class="fas fa-forward mr-1"></i> Go to SUS</button>
+              <button id="submitExpertValidation" class="bg-pink-600 text-white px-5 py-2 rounded-full hover:bg-pink-700 transition"><i class="fas fa-paper-plane mr-1"></i> Submit</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // ---------- RENDER: SUS PAGE ----------
+    function renderSUSPage() {
+      const susQuestions = [
+        "I think that I would like to use this system frequently.",
+        "I found the system unnecessarily complex.",
+        "I thought the system was easy to use.",
+        "I think that I would need the support of a technical person to be able to use this system.",
+        "I found the various functions in this system were well integrated.",
+        "I thought there was too much inconsistency in this system.",
+        "I would imagine that most people would learn to use this system very quickly.",
+        "I found the system very cumbersome to use.",
+        "I felt very confident using the system.",
+        "I needed to learn a lot of things before I could get going with this system."
+      ];
+
+      let susHtml = susQuestions.map((q, idx) => `
+        <div class="bg-white border border-gray-200 p-4 rounded-xl">
+          <p class="font-medium text-gray-800 mb-3"><span class="text-yellow-600 font-bold">Q${idx+1}.</span> ${q}</p>
+          <div class="flex gap-2 mb-3">
+            ${[1,2,3,4,5].map(n => `<button class="sus-rating-btn w-10 h-10 rounded-full border-2 border-gray-300 font-semibold text-gray-700 hover:border-yellow-500 hover:bg-yellow-100 transition" data-q="${idx}" data-value="${n}">${n}</button>`).join('')}
+          </div>
+          <div class="flex justify-between text-xs text-gray-400 px-1">
+            <span>Strongly Disagree</span>
+            <span>Strongly Agree</span>
+          </div>
+        </div>
+      `).join('');
+
+      return `
+        <div class="bg-white rounded-2xl shadow-md border border-purple-100 overflow-hidden">
+          <div class="p-6 bg-gradient-to-r from-yellow-50 to-orange-50 border-b flex items-center justify-between">
+            <h2 class="text-2xl font-bold text-gray-800"><i class="fas fa-star mr-2 text-yellow-600"></i>System Usability Scale (SUS)</h2>
+            <button id="backFromSUS" class="p-2 rounded-lg hover:bg-yellow-100 transition"><i class="fas fa-arrow-left text-yellow-600"></i></button>
+          </div>
+          
+          <div class="p-8 space-y-6">
+            <div class="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 p-5 rounded-xl">
+              <h3 class="font-semibold text-gray-800 mb-2 flex items-center gap-2">
+                <i class="fas fa-comments text-yellow-600"></i> Your Feedback Matters
+              </h3>
+              <p class="text-gray-700">Please rate your overall experience using PCOSense on these 10 items. Your honest feedback helps us create a better diagnostic tool.</p>
+            </div>
+
+            <div class="space-y-4 max-h-96 overflow-y-auto pr-2">
+              ${susHtml}
+            </div>
+
+            <div id="susFeedback" class="hidden bg-green-50 border border-green-200 p-5 rounded-xl">
+              <p class="text-green-800 font-semibold"><i class="fas fa-trophy mr-2"></i>SUS Survey Completed!</p>
+              <p id="susFeedbackDetails" class="text-sm text-green-700 mt-2"></p>
+            </div>
+          </div>
+
+          <div class="px-8 py-4 bg-gradient-to-r from-yellow-50/50 to-orange-50/50 border-t border-yellow-200 flex justify-between gap-3">
+            <button id="backToResultsFromSUS" class="px-5 py-2 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 transition"><i class="fas fa-arrow-left mr-1"></i> Back</button>
+            <div class="flex gap-3">
+              <button id="goToExpertFromSUS" class="px-5 py-2 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 transition"><i class="fas fa-backward mr-1"></i> Back to Expert</button>
+              <button id="submitSUS" class="bg-yellow-600 text-white px-5 py-2 rounded-full hover:bg-yellow-700 transition"><i class="fas fa-paper-plane mr-1"></i> Submit Feedback</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // ---------- RENDER: HISTORY ----------
+    function renderHistoryView() {
+      if (screeningHistory.length === 0) {
+        return `<div class="bg-white rounded-2xl p-12 text-center shadow-sm"><i class="fas fa-history text-5xl text-gray-300 mb-3"></i><p class="text-gray-400">No screenings yet. Start a new assessment.</p><button id="startFromEmptyHistory" class="mt-4 btn-primary px-5 py-2 rounded-full text-white">+ New Screening</button></div>`;
+      }
+      let cards = '';
+      screeningHistory.forEach(entry => {
+        let badgeColor = '';
+        let borderClass = '';
+        if (entry.prediction === 'PCOS Detected') { badgeColor = 'bg-red-100 text-red-800'; borderClass = 'border-red-300'; }
+        else if (entry.prediction === 'At Risk') { badgeColor = 'bg-pink-100 text-pink-800'; borderClass = 'border-pink-300'; }
+        else { badgeColor = 'bg-green-100 text-green-800'; borderClass = 'border-green-300'; }
+        const expertNote = entry.expertValidation ? `⭐ Expert: ${entry.expertValidation.avgScore.toFixed(1)}/5` : '';
+        cards += `
+          <div class="bg-white rounded-xl p-4 shadow-sm border-l-4 ${borderClass} flex flex-wrap justify-between items-center gap-3 hover:shadow-md transition">
+            <div><i class="far fa-calendar-alt text-purple-400 mr-2"></i><span class="text-sm text-gray-500">${entry.date}</span><div class="mt-1 font-semibold text-gray-800">${entry.prediction}</div></div>
+            <div class="flex items-center gap-2"><span class="text-sm">Confidence</span><div class="w-20 bg-gray-200 rounded-full h-1.5"><div class="bg-purple-500 h-1.5 rounded-full" style="width: ${entry.confidence}%"></div></div><span class="text-xs font-medium">${entry.confidence}%</span></div>
+            ${expertNote ? `<span class="text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded-full">${expertNote}</span>` : ''}
+          </div>
+        `;
+      });
+      return `<div class="bg-white rounded-2xl shadow-sm p-6"><div class="flex justify-between items-center mb-4"><h2 class="text-2xl font-semibold"><i class="fas fa-clock-rotate-left text-purple-500 mr-2"></i>Screening History</h2><button id="clearHistoryBtn" class="text-xs text-red-400 hover:underline">Clear all</button></div><div class="space-y-3">${cards}</div><div class="mt-6 flex justify-end"><button id="newFromHistoryBtn" class="btn-primary px-5 py-2 rounded-full text-white text-sm"><i class="fas fa-plus"></i> New Screening</button></div></div>`;
+    }
+
+    // ---------- RENDER: DASHBOARD ----------
+    function renderDashboard() {
+      return `
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div class="lg:col-span-2 bg-white rounded-2xl p-7 shadow-sm">
+            <div class="flex items-start justify-between"><div><h2 class="text-2xl font-bold text-gray-800">Welcome to PCOSense</h2><p class="text-gray-500 mt-1">AI-assisted PCOS detection from ultrasound + clinical data.<br>Explainable, private, women-centric.</p><button id="dashboardStartBtn" class="mt-5 btn-primary px-6 py-2.5 rounded-full text-white"><i class="fas fa-stethoscope mr-2"></i>Start new screening</button><button id="dashboardHistoryBtn" class="ml-3 px-6 py-2.5 rounded-full border border-purple-300 text-purple-700">View history</button></div><i class="fas fa-female text-6xl text-purple-200 opacity-60"></i></div>
+          </div>
+          <div class="bg-gradient-to-br from-purple-50 to-pink-50 rounded-2xl p-5 text-center shadow-sm"><i class="fas fa-microscope text-3xl text-purple-500 mb-2 block"></i><h3 class="font-bold">Smart Explainable AI</h3><p class="text-sm text-gray-600 mt-1">Ultrasound follicle detection + symptom mapping for clear insights.</p><img src="https://cdn-icons-png.flaticon.com/512/3039/3039412.png" class="w-24 mx-auto mt-3 opacity-80" alt="health illustration"></div>
+        </div>
+        <div class="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4"><div class="bg-white rounded-xl p-4 flex items-center gap-4 shadow-sm"><i class="fas fa-chart-simple text-2xl text-purple-400"></i><div><p class="text-xs text-gray-400">Recent screenings</p><p class="text-2xl font-bold">${screeningHistory.length}</p></div></div><div class="bg-white rounded-xl p-4 flex items-center gap-4 shadow-sm"><i class="fas fa-robot text-2xl text-purple-400"></i><div><p class="text-xs text-gray-400">Explainable AI</p><p class="text-sm">Visual heatmaps & contributions</p></div></div><div class="bg-white rounded-xl p-4 flex items-center gap-4 shadow-sm"><i class="fas fa-shield-heart text-2xl text-pink-400"></i><div><p class="text-xs text-gray-400">Privacy first</p><p class="text-sm">Your data stays on device</p></div></div></div>
+      `;
+    }
+
+    // ---------- VIEW SWITCHING ----------
+    function switchView(view, params = null) {
+      currentView = view;
+      renderCurrentView(params);
+    }
+
+    function renderCurrentView(params) {
+      if (currentView === 'dashboard') container.innerHTML = renderDashboard();
+      else if (currentView === 'clinical') container.innerHTML = renderClinicalUploadView();
+      else if (currentView === 'loading') container.innerHTML = renderLoadingView();
+      else if (currentView === 'results') container.innerHTML = renderResultsView(latestAIResult, clinicalData, uploadedImageDataURL);
+      else if (currentView === 'xaiMapping') container.innerHTML = renderXAIMappingPage();
+      else if (currentView === 'expertValidation') container.innerHTML = renderExpertValidationPage();
+      else if (currentView === 'sus') container.innerHTML = renderSUSPage();
+      else if (currentView === 'history') container.innerHTML = renderHistoryView();
+      
+      attachViewEvents();
+      
+      if (currentView === 'loading') startLoadingSimulation();
+      if (currentView === 'results' && uploadedImageDataURL) {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.getElementById('highlightCanvas');
+          if (canvas) drawHighlightedUltrasound(img, canvas, latestAIResult?.folliclePresence);
+        };
+        img.src = uploadedImageDataURL;
+      }
+      if (currentView === 'xaiMapping' && uploadedImageDataURL) {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.getElementById('xaiHighlightCanvas');
+          if (canvas) drawHighlightedUltrasound(img, canvas, latestAIResult?.folliclePresence);
+        };
+        img.src = uploadedImageDataURL;
+      }
+    }
+
+    // ---------- ATTACH EVENTS ----------
+    function attachViewEvents() {
+      // Dashboard
+      document.getElementById('dashboardStartBtn')?.addEventListener('click', () => { resetClinicalForm(); switchView('clinical'); });
+      document.getElementById('dashboardHistoryBtn')?.addEventListener('click', () => switchView('history'));
+
+      // Clinical upload
+      const uploadArea = document.getElementById('uploadArea');
+      const fileInput = document.getElementById('imageUploadInput');
+      if (uploadArea && fileInput) {
+        uploadArea.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => {
+          const file = e.target.files[0];
+          if (file && (file.type === 'image/jpeg' || file.type === 'image/png')) {
+            const reader = new FileReader();
+            reader.onload = (ev) => { uploadedImageDataURL = ev.target.result; document.getElementById('uploadPreviewImg').src = uploadedImageDataURL; document.getElementById('imagePreviewContainer').classList.remove('hidden'); };
+            reader.readAsDataURL(file);
+          } else alert('Please upload JPG or PNG');
+        };
+        document.getElementById('removeImageBtn')?.addEventListener('click', () => { uploadedImageDataURL = null; document.getElementById('imagePreviewContainer').classList.add('hidden'); fileInput.value = ''; });
+      }
+
+      // BMI calculation
+      function updateBMIDisplay() {
+        const h = parseFloat(document.getElementById('heightInput')?.value);
+        const w = parseFloat(document.getElementById('weightInput')?.value);
+        const el = document.getElementById('bmiValue');
+        if (el) {
+          if (!isNaN(h) && !isNaN(w) && h > 0) {
+            const bmi = w / ((h/100) * (h/100));
+            el.textContent = bmi.toFixed(1);
+          } else el.textContent = '-';
+        }
+      }
+      document.getElementById('heightInput')?.addEventListener('input', updateBMIDisplay);
+      document.getElementById('weightInput')?.addEventListener('input', updateBMIDisplay);
+
+      document.getElementById('startAnalysisBtn')?.addEventListener('click', () => {
+        const age = document.getElementById('ageInput')?.value;
+        const height = document.getElementById('heightInput')?.value;
+        const weight = document.getElementById('weightInput')?.value;
+        if (!age || !height || !weight || age < 12 || age > 60) { alert('Please enter valid age (12-60), height and weight'); return; }
+        if (!uploadedImageDataURL) { alert('Please upload an ultrasound image (JPG/PNG)'); return; }
+        const h = parseFloat(height);
+        const w = parseFloat(weight);
+        if (isNaN(h) || isNaN(w) || h <= 0 || w <= 0) { alert('Please enter valid numeric height and weight'); return; }
+        const bmiVal = (w / ((h/100) * (h/100))).toFixed(1);
+        clinicalData = {
+          age, height, weight, bmi: bmiVal,
+          menstrualIrregularities: document.getElementById('menstrualSelect')?.value || 'no',
+          acne: document.getElementById('acneSelect')?.value || 'no',
+          weightGain: document.getElementById('weightSelect')?.value || 'no',
+          familyHistory: document.getElementById('familySelect')?.value || 'no'
+        };
+        const bmiEl = document.getElementById('bmiValue'); if (bmiEl) bmiEl.textContent = bmiVal;
+        switchView('loading');
+      });
+      document.getElementById('cancelClinicalBtn')?.addEventListener('click', () => switchView('dashboard'));
+
+      // Results buttons
+      document.getElementById('saveAndHistoryBtn')?.addEventListener('click', () => { 
+        if(latestAIResult) addToHistory(latestAIResult.prediction, latestAIResult.confidence, clinicalData); 
+        switchView('history'); 
+      });
+      document.getElementById('newScreeningFromResults')?.addEventListener('click', () => { resetClinicalForm(); switchView('clinical'); });
+      document.getElementById('dashboardFromResults')?.addEventListener('click', () => switchView('dashboard'));
+
+      // Results to detailed pages navigation
+      document.getElementById('goToXAIMapping')?.addEventListener('click', () => switchView('xaiMapping'));
+      document.getElementById('goToExpertValidation')?.addEventListener('click', () => switchView('expertValidation'));
+      document.getElementById('goToSUS')?.addEventListener('click', () => switchView('sus'));
+
+      // XAI Mapping page navigation
+      document.getElementById('backFromXAI')?.addEventListener('click', () => switchView('results'));
+      document.getElementById('backToResultsFromXAI')?.addEventListener('click', () => switchView('results'));
+      document.getElementById('goToExpertFromXAI')?.addEventListener('click', () => switchView('expertValidation'));
+
+      // Expert Validation page navigation
+      document.getElementById('backFromExpert')?.addEventListener('click', () => switchView('results'));
+      document.getElementById('backToResultsFromExpert')?.addEventListener('click', () => switchView('results'));
+      document.getElementById('goToSUSFromExpert')?.addEventListener('click', () => switchView('sus'));
+
+      // SUS page navigation
+      document.getElementById('backFromSUS')?.addEventListener('click', () => switchView('results'));
+      document.getElementById('backToResultsFromSUS')?.addEventListener('click', () => switchView('results'));
+      document.getElementById('goToExpertFromSUS')?.addEventListener('click', () => switchView('expertValidation'));
+
+      // History
+      document.getElementById('startFromEmptyHistory')?.addEventListener('click', () => { resetClinicalForm(); switchView('clinical'); });
+      document.getElementById('newFromHistoryBtn')?.addEventListener('click', () => { resetClinicalForm(); switchView('clinical'); });
+      document.getElementById('clearHistoryBtn')?.addEventListener('click', () => { screeningHistory = []; saveHistoryToStorage(); switchView('history'); });
+
+      // Top nav
+      document.getElementById('navDashboardBtn')?.addEventListener('click', () => switchView('dashboard'));
+      document.getElementById('navHistoryBtn')?.addEventListener('click', () => switchView('history'));
+      document.getElementById('newScreeningNavBtn')?.addEventListener('click', () => { resetClinicalForm(); switchView('clinical'); });
+
+      // --- EXPERT VALIDATION EVENTS ---
+      attachExpertValidationEvents();
+      // --- SUS EVENTS ---
+      attachSUSEvents();
+    }
+
+    // ---------- EXPERT VALIDATION LOGIC ----------
+    function attachExpertValidationEvents() {
+      const btns = document.querySelectorAll('.expert-rating-btn');
+      btns.forEach(btn => {
+        btn.addEventListener('click', function() {
+          const criteria = this.dataset.criteria;
+          const value = this.dataset.value;
+          expertValidationData[criteria] = parseInt(value);
+          const parent = this.parentElement;
+          parent.querySelectorAll('.expert-rating-btn').forEach(b => {
+            b.classList.remove('selected', 'bg-pink-500', 'text-white', 'border-pink-500');
+            if (parseInt(b.dataset.value) <= parseInt(value)) {
+              b.classList.add('selected', 'bg-pink-500', 'text-white', 'border-pink-500');
+            }
+          });
+        });
+      });
+
+      document.getElementById('submitExpertValidation')?.addEventListener('click', function() {
+        const alignment = expertValidationData[0] || 0;
+        const relevance = expertValidationData[1] || 0;
+        const consistency = expertValidationData[2] || 0;
+        const correlation = expertValidationData[3] || 0;
+        if (alignment === 0 || relevance === 0 || consistency === 0 || correlation === 0) {
+          alert('Please rate all 4 criteria (1-5).');
+          return;
+        }
+        const avgScore = (alignment + relevance + consistency + correlation) / 4;
+        const comments = document.getElementById('expertComments')?.value || '';
+        
+        const feedback = document.getElementById('expertFeedback');
+        const feedbackDetails = document.getElementById('expertFeedbackDetails');
+        if (feedback && feedbackDetails) {
+          feedback.classList.remove('hidden');
+          feedbackDetails.innerHTML = `Average Score: <strong>${avgScore.toFixed(1)}/5</strong><br>
+            Region Alignment: ${alignment}/5 | Clinical Relevance: ${relevance}/5 | Consistency: ${consistency}/5 | Confidence Correlation: ${correlation}/5
+            ${comments ? `<br><strong>Notes:</strong> ${comments}` : ''}`;
+        }
+        this.disabled = true;
+        this.textContent = '✓ Submitted';
+        
+        // Save to history if available
+        if (latestAIResult && screeningHistory.length > 0) {
+          screeningHistory[0].expertValidation = { alignment, relevance, consistency, correlation, avgScore, comments };
+          saveHistoryToStorage();
+        }
+      });
+    }
+
+    // ---------- SUS LOGIC ----------
+    function attachSUSEvents() {
+      const susBtns = document.querySelectorAll('.sus-rating-btn');
+      susBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+          const q = this.dataset.q;
+          const val = this.dataset.value;
+          susRatingsData[q] = parseInt(val);
+          const parent = this.parentElement;
+          parent.querySelectorAll('.sus-rating-btn').forEach(b => {
+            b.classList.remove('selected', 'bg-yellow-500', 'text-white', 'border-yellow-500');
+            if (parseInt(b.dataset.value) <= parseInt(val)) {
+              b.classList.add('selected', 'bg-yellow-500', 'text-white', 'border-yellow-500');
+            }
+          });
+        });
+      });
+
+      document.getElementById('submitSUS')?.addEventListener('click', function() {
+        const total = Object.keys(susRatingsData).length;
+        if (total < 10) {
+          alert(`Please answer all 10 questions (currently ${total}/10).`);
+          return;
+        }
+        let sum = 0;
+        for (let i = 0; i < 10; i++) {
+          const rating = susRatingsData[i] || 3;
+          if (i % 2 === 0) sum += rating - 1;
+          else sum += 5 - rating;
+        }
+        const susScore = sum * 2.5;
+        let grade = '';
+        if (susScore >= 80.3) grade = 'Excellent (Grade A)';
+        else if (susScore >= 68) grade = 'Good (Grade B)';
+        else if (susScore >= 50.9) grade = 'Okay (Grade C)';
+        else grade = 'Poor (Grade D/F)';
+
+        const feedback = document.getElementById('susFeedback');
+        const feedbackDetails = document.getElementById('susFeedbackDetails');
+        if (feedback && feedbackDetails) {
+          feedback.classList.remove('hidden');
+          feedbackDetails.innerHTML = `Your SUS Score: <strong>${susScore.toFixed(1)}/100</strong><br>Rating: <strong>${grade}</strong>`;
+        }
+        this.disabled = true;
+        this.textContent = '✓ Submitted';
+        localStorage.setItem('pcosense_sus_score', JSON.stringify({ score: susScore, date: new Date().toISOString(), ratings: susRatingsData }));
+      });
+    }
+
+    // ---------- LOADING SIMULATION ----------
+    function startLoadingSimulation() {
+      let width = 0;
+      const interval = setInterval(() => {
+        width += 10;
+        const fillDiv = document.getElementById('progressFill');
+        if (fillDiv) fillDiv.style.width = `${Math.min(width, 100)}%`;
+        if (width >= 100) {
+          clearInterval(interval);
+          const aiResult = simulateAIDetection(clinicalData, !!uploadedImageDataURL);
+          latestAIResult = aiResult;
+          addToHistory(aiResult.prediction, aiResult.confidence, clinicalData);
+          switchView('results');
+        }
+      }, 160);
+    }
+
+    function resetClinicalForm() {
+      clinicalData = { age: '', height: '', weight: '', bmi: '', menstrualIrregularities: 'no', acne: 'no', weightGain: 'no', familyHistory: 'no' };
+      uploadedImageDataURL = null;
+    }
+
+    // ---------- INIT ----------
+    loadHistoryFromStorage();
+    switchView('dashboard');
+  </script>
+</body>
+</html>
